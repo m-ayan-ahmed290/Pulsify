@@ -42,6 +42,11 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     val searchHistory = app.preferences.searchHistory.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
     val effects = MutableStateFlow(EffectsState())
     private var undoItem: Pair<Int, MediaItem>? = null
+    val supportPrompt = MutableStateFlow(false)
+    fun checkSupportPrompt() = action {
+        if(!supportPrompt.value && app.preferences.claimSupportPrompt(System.currentTimeMillis())) supportPrompt.value = true
+    }
+    fun dismissSupportPrompt() { supportPrompt.value = false }
     val scanning = MutableStateFlow(false)
     val message = MutableStateFlow<String?>(null)
     val playback = MutableStateFlow(Playback())

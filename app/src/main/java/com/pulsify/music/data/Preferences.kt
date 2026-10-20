@@ -6,6 +6,7 @@ import androidx.datastore.preferences.preferencesDataStore
 import kotlinx.coroutines.flow.map
 import org.json.JSONArray
 import com.pulsify.music.domain.rememberedSearches
+import com.pulsify.music.domain.supportPromptDue
 
 private val Context.preferences by preferencesDataStore("settings")
 data class Settings(val theme: String = "Dark", val dynamic: Boolean = false, val folder: String = "",
@@ -23,6 +24,15 @@ class Preferences(private val context: Context) {
             val old = runCatching { val data = JSONArray(p[stringPreferencesKey("searchHistory")] ?: "[]"); (0 until data.length()).map { data.getString(it) } }.getOrDefault(emptyList())
             p[stringPreferencesKey("searchHistory")] = JSONArray(rememberedSearches(old, query)).toString()
         }
+    }
+    /** Claim atomically before display so reopening or concurrent checks cannot repeat the prompt. */
+    suspend fun claimSupportPrompt(now: Long): Boolean {
+        var claimed = false
+        context.preferences.edit { p ->
+            val key = longPreferencesKey("supportLastShown")
+            if(supportPromptDue(now, p[key])) { p[key] = now; claimed = true }
+        }
+        return claimed
     }
     suspend fun number(key: String, value: Int) { context.preferences.edit { it[intPreferencesKey(key)] = value } }
     suspend fun text(key: String, value: String) { context.preferences.edit { it[stringPreferencesKey(key)] = value } }

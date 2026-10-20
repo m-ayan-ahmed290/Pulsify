@@ -27,6 +27,10 @@ The supplied **Pulsify App Icon.png** is the launcher icon and appears on Home. 
 - Light/dark/system appearance, optional Android 12+ dynamic colors, artwork fallback, temporary image-cache clearing, Android permission settings.
 - Keyboard-safe search and naming dialogs: `adjustResize`, safe-area/IME insets, scrollable dialogs, focused-field bring-into-view, and navigation hidden during keyboard use.
 
+## Supporting Pulsify
+
+Settings → Support Pulsify opens [Buy Me a Coffee / bunnyfrost](https://www.buymeacoffee.com/bunnyfrost) in your browser. An optional, dismissible card on Home appears at most once every seven days. Its cooldown is stored locally before display, survives restarts, and is not reset by dismissing or following the link. Leaving Home or backgrounding the app hides the card. There are no donation notifications or blocking dialogs.
+
 ## Requirements and build
 
 - Android Studio Meerkat or newer with compatible Android Gradle Plugin support.

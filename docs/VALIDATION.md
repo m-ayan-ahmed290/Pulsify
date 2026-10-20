@@ -1,5 +1,11 @@
 # Validation
 
+## Support link and weekly reminder — 2026-10-20
+
+- Settings has a permanent, optional link to `https://www.buymeacoffee.com/bunnyfrost`. Home uses a dismissible inline card; no modal, notification, or playback interruption is introduced.
+- The rolling seven-day timestamp is claimed in an atomic DataStore transaction before display. Reopens and concurrent checks cannot claim it again within the cooldown. Leaving Home/backgrounding hides the current card.
+- Unit coverage checks first display, the exact seven-day boundary, clock rollback, eight concurrent claims producing one winner, and cooldown retention across new Preferences instances. All **28 unit tests** pass; debug build and lint pass. Device/browser-launch checks were not run.
+
 ## Pulsify 1.1.1 lyrics and queue fixes — 2026-10-20
 
 - `testDebugUnitTest lintDebug assembleDebug assembleDebugAndroidTest` passes with **25 unit tests**, zero failures/errors, and no lint errors.

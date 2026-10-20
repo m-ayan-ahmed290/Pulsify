@@ -27,6 +27,12 @@ import java.time.LocalTime
 
 @Composable fun HomeScreen(vm: MusicViewModel, onLibrary: (String) -> Unit, onSettings: () -> Unit,
     onMore: (Track) -> Unit, onNow: () -> Unit, onEffects: () -> Unit, onAddMusic: () -> Unit) {
+    val support by vm.supportPrompt.collectAsStateWithLifecycle()
+    LaunchedEffect(Unit) { vm.checkSupportPrompt() }
+    androidx.lifecycle.compose.LifecycleEventEffect(androidx.lifecycle.Lifecycle.Event.ON_RESUME) { vm.checkSupportPrompt() }
+    androidx.lifecycle.compose.LifecycleEventEffect(androidx.lifecycle.Lifecycle.Event.ON_STOP) { vm.dismissSupportPrompt() }
+    DisposableEffect(Unit) { onDispose { vm.dismissSupportPrompt() } }
+    val context = androidx.compose.ui.platform.LocalContext.current
     val count by vm.count.collectAsStateWithLifecycle()
     val fresh by vm.home.collectAsStateWithLifecycle()
     val history by vm.history.collectAsStateWithLifecycle()
@@ -54,6 +60,9 @@ import java.time.LocalTime
                 FilterChip(false, onClick = { onLibrary("Albums") }, label = { Text("Albums") })
             }
         } }
+        if(support) item("support") {
+            SupportCard(onSupport = { vm.dismissSupportPrompt(); openSupportPage(context) { vm.message.value = it } }, onDismiss = vm::dismissSupportPrompt)
+        }
         item("mix") { Entrance(2) {
             Box(Modifier.padding(horizontal = 20.dp, vertical = 12.dp).fillMaxWidth().clip(RoundedCornerShape(26.dp))
                 .background(Brush.linearGradient(listOf(Color(0xFF35423B), Color(0xFF233533), Color(0xFF151E29))))) {

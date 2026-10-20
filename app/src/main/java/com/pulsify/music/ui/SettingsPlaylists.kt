@@ -116,6 +116,9 @@ import com.pulsify.music.data.Playlist
             context.startActivity(Intent(AndroidSettings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:${context.packageName}")))
         }) }
         item { SettingRow("About Pulsify", "Local music. No account. No tracking.", Icons.Rounded.Info, { info = true }) }
+        item { SettingRow("Support Pulsify", "Buy bunnyfrost a coffee · Optional support", Icons.Rounded.Coffee, {
+            vm.dismissSupportPrompt(); openSupportPage(context) { vm.message.value = it }
+        }) }
         item { Text("PULSIFY", Modifier.fillMaxWidth().padding(top = 32.dp, bottom = 8.dp), color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelLarge, textAlign = androidx.compose.ui.text.style.TextAlign.Center) }
     }
     if(skipPicker) AlertDialog(onDismissRequest = { skipPicker = false }, title = { Text("Seek distance") }, text = { Column { listOf(5,10,15,30,60).forEach { seconds -> TextButton(onClick = { vm.skipSetting(seconds); skipPicker = false }, modifier = Modifier.fillMaxWidth()) { Text("$seconds seconds" + if(settings.skip == seconds) " ✓" else "") } } } }, confirmButton = { TextButton(onClick = { skipPicker = false }) { Text("Close") } })
