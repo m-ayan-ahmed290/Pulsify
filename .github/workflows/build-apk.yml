@@ -20,9 +20,10 @@ jobs:
           distribution: temurin
           java-version: '17'
       - uses: android-actions/setup-android@v3
+        with:
+          # The action defaults include the retired SDK "tools" package.
+          packages: 'platform-tools platforms;android-35 build-tools;35.0.0'
       - uses: gradle/actions/setup-gradle@v4
-      - name: Install SDK
-        run: sdkmanager 'platforms;android-35' 'build-tools;35.0.0'
       - run: chmod +x gradlew
       - name: Test, lint and build debug APK
         run: ./gradlew testDebugUnitTest lintDebug assembleDebug -PversionCode=${{ github.run_number }}
@@ -54,6 +55,9 @@ jobs:
           distribution: temurin
           java-version: '17'
       - uses: android-actions/setup-android@v3
+        with:
+          # The action defaults include the retired SDK "tools" package.
+          packages: 'platform-tools platforms;android-35 build-tools;35.0.0'
       - uses: gradle/actions/setup-gradle@v4
       - name: Restore stable release signing key
         env:
@@ -70,7 +74,6 @@ jobs:
         shell: bash
         run: |
           chmod +x gradlew
-          sdkmanager 'platforms;android-35' 'build-tools;35.0.0'
           ./gradlew assembleRelease bundleRelease -PversionCode=${{ github.run_number }} -PversionName="${GITHUB_REF_NAME#v}"
           cp app/build/outputs/apk/release/app-release.apk pulsify.apk
           cp app/build/outputs/bundle/release/app-release.aab pulsify.aab
