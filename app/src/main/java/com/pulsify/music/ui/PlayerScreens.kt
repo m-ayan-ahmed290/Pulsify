@@ -191,10 +191,10 @@ import kotlin.math.roundToInt
         LazyColumn(contentPadding = PaddingValues(horizontal = 18.dp, vertical = 8.dp)) {
             itemsIndexed(state.queue, key = { index,_ -> keys[index] }) { index,item ->
                 val currentIndex by rememberUpdatedState(index)
-                val dismiss = rememberSwipeToDismissBoxState(confirmValueChange = { value -> if(value == SwipeToDismissBoxValue.EndToStart) { vm.removeQueue(currentIndex); true } else false })
+                val dismiss = rememberSwipeToDismissBoxState(confirmValueChange = { value -> if(value == SwipeToDismissBoxValue.EndToStart) { vm.removeQueue(currentIndex); false } else false })
                 Column(Modifier.animateItem()) {
                     if(index == state.index) Text("NOW PLAYING", Modifier.padding(vertical = 10.dp), color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelSmall)
-                    SwipeToDismissBox(dismiss, backgroundContent = { Box(Modifier.fillMaxSize().clip(RoundedCornerShape(16.dp)).background(MaterialTheme.colorScheme.errorContainer).padding(18.dp), contentAlignment = Alignment.CenterEnd) { Icon(Icons.Rounded.DeleteOutline, "Remove", tint = MaterialTheme.colorScheme.onErrorContainer) } }, enableDismissFromStartToEnd = false) {
+                    SwipeToDismissBox(dismiss, backgroundContent = { if(dismiss.dismissDirection != SwipeToDismissBoxValue.Settled) Box(Modifier.fillMaxSize().clip(RoundedCornerShape(16.dp)).background(MaterialTheme.colorScheme.errorContainer).padding(18.dp), contentAlignment = Alignment.CenterEnd) { Icon(Icons.Rounded.DeleteOutline, "Remove", tint = MaterialTheme.colorScheme.onErrorContainer) } }, enableDismissFromStartToEnd = false) {
                         Surface(shape = RoundedCornerShape(16.dp), color = if(index == state.index) MaterialTheme.colorScheme.primaryContainer.copy(alpha = .45f) else MaterialTheme.colorScheme.surface) {
                             Row(Modifier.fillMaxWidth().clickable { vm.jumpQueue(index) }.padding(vertical = 10.dp, horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                                 Artwork(item.mediaMetadata.artworkUri?.path, item.mediaMetadata.title.toString(), Modifier.size(52.dp))
@@ -202,7 +202,7 @@ import kotlin.math.roundToInt
                                     Text(item.mediaMetadata.title.toString(), maxLines = 1, overflow = TextOverflow.Ellipsis, color = if(index == state.index) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onSurface, style = MaterialTheme.typography.titleSmall)
                                     Text(item.mediaMetadata.artist.toString(), Modifier.padding(top = 4.dp), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
                                 }
-                                ActionIcon(Icons.Rounded.Close, "Remove from queue") { vm.removeQueue(index) }
+                                if(dismiss.dismissDirection == SwipeToDismissBoxValue.Settled) ActionIcon(Icons.Rounded.Close, "Remove from queue") { vm.removeQueue(index) } else Spacer(Modifier.size(48.dp))
                             }
                         }
                     }

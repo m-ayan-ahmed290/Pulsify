@@ -58,7 +58,7 @@ import com.pulsify.music.domain.*
                 Text(title, style = MaterialTheme.typography.headlineMedium, maxLines = 2, overflow = TextOverflow.Ellipsis)
             }
             if(!detail) ActionIcon(Icons.Rounded.Tune, "Library settings", onClick = onSettings)
-            ActionIcon(Icons.Rounded.Refresh, "Rescan library", onClick = { vm.scan() })
+            ActionIcon(Icons.Rounded.Refresh, "Rescan library", onClick = { vm.scan(manual = true) })
         }
         if(!detail) Row(Modifier.horizontalScroll(rememberScrollState()).padding(horizontal = 20.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             listOf("Songs", "Albums", "Artists", "Genres", "Folders", "Favorites", "Recently added", "Recently played", "Most played").forEach { section ->

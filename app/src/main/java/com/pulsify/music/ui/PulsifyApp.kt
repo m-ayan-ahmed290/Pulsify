@@ -57,8 +57,9 @@ import kotlinx.coroutines.launch
         var pendingSelection by remember { mutableStateOf(false) }
         var details by remember { mutableStateOf<Song?>(null) }
         var lyricsOpen by remember { mutableStateOf(false) }
-        var lyricSong by remember { mutableStateOf("") }
+        var lyricSong by rememberSaveable { mutableStateOf("") }
         val lyrics by vm.lyrics.collectAsStateWithLifecycle()
+        DisposableEffect(lyricsOpen) { vm.followLyrics(lyricsOpen); onDispose { vm.followLyrics(false) } }
         val permission = if(Build.VERSION.SDK_INT >= 33) Manifest.permission.READ_MEDIA_AUDIO else Manifest.permission.READ_EXTERNAL_STORAGE
         val requestAudio = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
             if(granted) vm.useDevice() else vm.message.value = "Audio access was denied. You can choose a specific music folder instead, or allow access in Android app settings."
@@ -71,7 +72,8 @@ import kotlinx.coroutines.launch
         }
         val lyricsPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> if(uri != null) vm.attachLyrics(lyricSong, uri) }
         fun library(section: String) { vm.filter.value = LibraryFilter(section = section); nav.navigate("library") { launchSingleTop = true } }
-        fun openLyrics() { playback.item?.let { lyricSong = it.mediaId; vm.loadLyrics(it.mediaId); lyricsOpen = true } }
+        fun openLyrics() { if(playback.item != null) lyricsOpen = true }
+        LaunchedEffect(lyricsOpen, playback.item?.mediaId) { if(lyricsOpen) playback.item?.mediaId?.let(vm::loadLyrics) }
         fun equalizer() { nav.navigate("effects") { launchSingleTop = true } }
         LaunchedEffect(message) { message?.let {
             val result = snack.showSnackbar(it, actionLabel = if(it == "Removed from queue") "Undo" else null)
@@ -82,7 +84,9 @@ import kotlinx.coroutines.launch
             if(settings.folder.isNotEmpty() || ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED) vm.scan()
         }
         var firstResume by remember { mutableStateOf(true) }
+        LifecycleEventEffect(Lifecycle.Event.ON_STOP) { vm.followLyrics(false) }
         LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
+            vm.followLyrics(lyricsOpen)
             if(firstResume) firstResume = false
             else if(settings.folder.isNotEmpty() || ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED) vm.scan()
         }
@@ -161,14 +165,12 @@ import kotlinx.coroutines.launch
                     "File" to song.id).forEach { (key,value) -> Text("$key\n${value.ifBlank { "Unknown" }}", style = MaterialTheme.typography.bodyMedium) }
             }
         }, confirmButton = { TextButton(onClick = { details = null }) { Text("Done") } }) }
-        if(lyricsOpen) ModalBottomSheet(onDismissRequest = { lyricsOpen = false }) {
-            Column(Modifier.fillMaxWidth().heightIn(max = 620.dp).padding(horizontal = 24.dp).padding(bottom = 24.dp)) {
-                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) { Text("EVERY WORD, EVERY FEELING", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelSmall); Text("Lyrics", style = MaterialTheme.typography.headlineMedium) }
-                    TextButton(onClick = { lyricsPicker.launch(arrayOf("text/*", "application/octet-stream")) }) { Text("Attach file") }
-                }
-                Text(lyrics ?: "Your words belong here.\n\nAttach a local .txt or .lrc file to read along. Lyrics stay on this device.", Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState()).padding(vertical = 24.dp), style = MaterialTheme.typography.headlineSmall, color = MaterialTheme.colorScheme.onSurface.copy(alpha = .8f))
-            }
+        if(lyricsOpen) ModalBottomSheet(onDismissRequest = { lyricsOpen = false }, sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
+            LyricsContent(lyrics?.takeIf { it.songId == playback.item?.mediaId }, playback.position,
+                playback.item?.mediaMetadata?.title?.toString().orEmpty(),
+                onAttach = { playback.item?.let { lyricSong = it.mediaId; lyricsPicker.launch(arrayOf("*/*")) } },
+                onSeek = vm::playFromLyric, onDelay = { delay -> playback.item?.mediaId?.let { vm.lyricsDelay(it, delay) } },
+                onRemove = { playback.item?.mediaId?.let(vm::removeLyrics) })
         }
     }
 }

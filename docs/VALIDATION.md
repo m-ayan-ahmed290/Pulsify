@@ -1,5 +1,17 @@
 # Validation
 
+## Pulsify 1.1.1 lyrics and queue fixes — 2026-10-20
+
+- `testDebugUnitTest lintDebug assembleDebug assembleDebugAndroidTest` passes with **25 unit tests**, zero failures/errors, and no lint errors.
+- Five new lyrics tests cover filename validation independent of provider MIME type, fractional and repeated timestamps, ordering, LRC file offsets, hour timestamps, simultaneous translations, instrumental gaps, malformed/plain text, and matching highlight/seek timing.
+- Two new device-test cases compile: active-line selection/tap-to-seek, and the per-song delay control. These new device tests have **not** been run on an emulator or physical device in this change.
+- Picker uses `*/*` so Android providers cannot exclude LRC based on MIME classification; selected filenames and bounded UTF-8 contents are validated before replacing the stored attachment. File picking on individual OEM document providers remains a device regression check.
+- Queue delete background is absent at rest, including on the translucent current-song row. The foreground X is absent during swiping. A rejected dismiss state permits a removed track to return cleanly through Undo. Visual swipe/Undo regression on a physical device remains required.
+- Only Library/Settings rescan buttons call `scan(manual = true)`. Startup/resume, source/setting changes, observers, and queued automatic scans do not post the song-count snackbar. A manual request queued behind an automatic scan retains its manual reporting flag.
+- Lyrics polling increases to 100 ms only while the lyrics sheet is visible in the foreground; status commands remain limited to once per second. Parser results are remembered, active-line lookup uses binary search, and displayed rows are lazy. No frame-time benchmark is claimed.
+- Per-song timing changes are saved separately from the lyrics text. Replacing/removing an attachment resets its adjustment. Original source files are never edited.
+
+
 ## Pulsify 1.1.0 redesign — 2026-10-20
 
 Toolchain: JDK 17, Gradle 8.11.1, AGP 8.9.2, Kotlin 2.1.20, SDK Platform 35 / Build Tools 35.0.0.

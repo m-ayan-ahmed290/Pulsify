@@ -50,9 +50,12 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         val column = when(section) { "Albums" -> "album"; "Artists" -> "artist"; "Genres" -> "genre"; else -> "folder" }
         dao.groups(SimpleSQLiteQuery("SELECT $column AS name, COUNT(*) AS count, MIN(artwork) AS artwork FROM songs GROUP BY $column ORDER BY $column COLLATE NOCASE"))
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    private var lyricsFollowing = false
+    fun followLyrics(visible: Boolean) { lyricsFollowing = visible }
     private var controller: MediaController? = null
     private var scanJob: Job? = null
     private var scanPending = false
+    private var scanPendingManual = false
     private val controllerFuture = MediaController.Builder(app, SessionToken(app, ComponentName(app, MusicService::class.java))).buildAsync()
     private val observer = object : ContentObserver(Handler(Looper.getMainLooper())) {
         override fun onChange(selfChange: Boolean) {
@@ -72,9 +75,12 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         }, ContextCompat.getMainExecutor(app))
         try { app.contentResolver.registerContentObserver(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, true, observer) } catch (_: SecurityException) { /* Folder mode does not require MediaStore access. */ }
         viewModelScope.launch {
+            var nextStatus = 0L
             while(isActive) {
                 updatePlayer(false)
-                if(controller != null) {
+                val now = android.os.SystemClock.elapsedRealtime()
+                if(controller != null && now >= nextStatus) {
+                    nextStatus = now + 1000
                     val future = controller!!.sendCustomCommand(SessionCommand(MusicService.SLEEP_STATUS, Bundle.EMPTY), Bundle.EMPTY)
                     future.addListener({
                         runCatching { future.get() }.getOrNull()?.extras?.let { extras ->
@@ -84,7 +90,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
                         }
                     }, ContextCompat.getMainExecutor(app))
                 }
-                delay(1000)
+                delay(if(lyricsFollowing) 100 else 1000)
             }
         }
         viewModelScope.launch { dao.observeTracks(LibraryQuery.build(LibraryFilter(section = "Recently added"), 12)).collect { home.value = it } }
@@ -98,12 +104,12 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
             c.currentMediaItemIndex, c.playbackParameters.speed, old.sleep, old.loopA, old.loopB, old.volume)
         if(current.value?.song?.id != c.currentMediaItem?.mediaId) viewModelScope.launch { current.value = c.currentMediaItem?.mediaId?.let { dao.track(it) } }
     }
-    fun scan(): Job = viewModelScope.launch {
-        if(scanning.value) { scanPending = true; return@launch }
+    fun scan(manual: Boolean = false): Job = viewModelScope.launch {
+        if(scanning.value) { scanPending = true; scanPendingManual = scanPendingManual || manual; return@launch }
         scanning.value = true
-        try { val found = app.scanner.scan(); message.value = "$found songs in your library"; refreshHome() }
+        try { val found = app.scanner.scan(); if(manual) message.value = "$found songs in your library"; refreshHome() }
         catch(e: Exception) { message.value = e.message ?: "Unable to scan this library. Check folder access in Settings." }
-        finally { scanning.value = false; if(scanPending) { scanPending = false; scan() } }
+        finally { scanning.value = false; if(scanPending) { val report = scanPendingManual; scanPending = false; scanPendingManual = false; scan(report) } }
     }
     suspend fun refreshHome() { home.value = withContext(Dispatchers.IO) { dao.tracks(LibraryQuery.build(LibraryFilter(section = "Recently added"), 12)) } }
     fun playPlaylist(id: Long, shuffle: Boolean = false) = action {
@@ -231,22 +237,54 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         future.addListener({ runCatching { future.get() }.getOrNull()?.extras?.let { playback.value = playback.value.copy(loopA = it.getLong("loopA", -1), loopB = it.getLong("loopB", -1)) } }, ContextCompat.getMainExecutor(app))
     }
     fun volume(value: Float) { controller?.sendCustomCommand(SessionCommand(MusicService.VOLUME, Bundle.EMPTY), Bundle().apply { putFloat("volume", value.coerceIn(0f,1f)) }); playback.value = playback.value.copy(volume = value.coerceIn(0f,1f)) }
-    val lyrics = MutableStateFlow<String?>(null)
-    private fun lyricFile(id: String) = java.io.File(app.filesDir, "lyrics/" + java.security.MessageDigest.getInstance("SHA-256").digest(id.toByteArray()).joinToString("") { "%02x".format(it) } + ".txt")
-    fun loadLyrics(id: String) = action { lyrics.value = withContext(Dispatchers.IO) { lyricFile(id).takeIf { it.exists() }?.readText() } }
+    val lyrics = MutableStateFlow<LyricsDocument?>(null)
+    private var lyricsSongId: String? = null
+    private var lyricsLoad: Job? = null
+    private val lyricsSettings by lazy { app.getSharedPreferences("lyrics-timing", android.content.Context.MODE_PRIVATE) }
+    private fun lyricKey(id: String) = java.security.MessageDigest.getInstance("SHA-256").digest(id.toByteArray()).joinToString("") { "%02x".format(it) }
+    private fun lyricFile(id: String) = java.io.File(app.filesDir, "lyrics/" + lyricKey(id) + ".txt")
+    fun loadLyrics(id: String) {
+        lyricsSongId = id; lyricsLoad?.cancel(); lyrics.value = null
+        lyricsLoad = action {
+            val document = withContext(Dispatchers.IO) { lyricFile(id).takeIf { it.exists() }?.let { LyricsDocument(id, it.readText(), lyricsSettings.getLong(lyricKey(id), 0)) } }
+            if(lyricsSongId == id) lyrics.value = document
+        }
+    }
     fun attachLyrics(id: String, uri: Uri) = action {
-        withContext(Dispatchers.IO) {
-            val text = app.contentResolver.openInputStream(uri)?.bufferedReader()?.use { reader ->
+        val document = withContext(Dispatchers.IO) {
+            val name = app.contentResolver.query(uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null)?.use { cursor ->
+                if(cursor.moveToFirst()) cursor.getString(0) else null
+            } ?: uri.lastPathSegment.orEmpty()
+            require(isLyricsFilename(name)) { "Choose a .txt or .lrc lyrics file" }
+            val decoder = Charsets.UTF_8.newDecoder().onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
+            val text = app.contentResolver.openInputStream(uri)?.let { stream -> java.io.InputStreamReader(stream, decoder).buffered().use { reader ->
                 val result = StringBuilder(); val buffer = CharArray(4096)
                 while(true) { val n = reader.read(buffer); if(n < 0) break; result.append(buffer,0,n); require(result.length < 500_000) { "Lyrics file is too large" } }
                 result.toString()
-            } ?: error("Cannot read lyrics")
-            lyricFile(id).apply { parentFile?.mkdirs(); writeText(text) }; lyrics.value = text
+            } } ?: error("Cannot read lyrics")
+            require(text.isNotBlank() && !text.contains('\u0000')) { "Choose a readable UTF-8 .txt or .lrc file" }
+            lyricFile(id).apply { parentFile?.mkdirs(); writeText(text) }
+            lyricsSettings.edit().remove(lyricKey(id)).apply()
+            LyricsDocument(id, text)
         }
+        if(lyricsSongId == id) { lyricsLoad?.cancel(); lyrics.value = document }
+        message.value = "Lyrics attached"
+    }
+    fun lyricsDelay(id: String, delay: Long) {
+        val value = delay.coerceIn(-30_000, 30_000)
+        if(lyrics.value?.songId == id) lyrics.value = lyrics.value?.copy(delayMs = value)
+        lyricsSettings.edit().putLong(lyricKey(id), value).apply()
+    }
+    fun removeLyrics(id: String) = action {
+        withContext(Dispatchers.IO) { lyricFile(id).delete(); lyricsSettings.edit().remove(lyricKey(id)).apply() }
+        if(lyricsSongId == id) { lyricsLoad?.cancel(); lyrics.value = null }
+    }
+    fun playFromLyric(position: Long) {
+        controller?.let { c -> c.seekTo(position.coerceIn(0, c.duration.coerceAtLeast(0))); c.play() }
     }
     private fun validName(name: String): String = name.trim().also { require(it.isNotEmpty() && it.length <= 80) { "Use a playlist name between 1 and 80 characters" } }
     private fun action(block: suspend () -> Unit) = viewModelScope.launch {
-        try { block() } catch(e: Exception) { message.value = if(e is android.database.sqlite.SQLiteConstraintException) "That playlist name already exists" else e.message ?: "Something went wrong. Please try again." }
+        try { block() } catch(e: Exception) { if(e is CancellationException) throw e; message.value = if(e is android.database.sqlite.SQLiteConstraintException) "That playlist name already exists" else e.message ?: "Something went wrong. Please try again." }
     }
     override fun onCleared() { app.contentResolver.unregisterContentObserver(observer); MediaController.releaseFuture(controllerFuture); super.onCleared() }
 }

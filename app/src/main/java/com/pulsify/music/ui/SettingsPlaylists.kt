@@ -100,7 +100,7 @@ import com.pulsify.music.data.Playlist
         item { SectionTitle("Music library") }
         item { SettingRow("Music folder", if(settings.folder.isEmpty()) "Device audio library" else Uri.decode(settings.folder).substringAfterLast("tree/"), Icons.Rounded.FolderOpen, onFolder) }
         item { SettingRow("Use device audio library", "Request audio access to scan shared music", Icons.Rounded.LibraryMusic, onAccess) }
-        item { SettingRow(if(scanning) "Scanning your music…" else "Rescan library", "$count songs · New and deleted files update automatically", Icons.Rounded.Refresh, { vm.scan() }) }
+        item { SettingRow(if(scanning) "Scanning your music…" else "Rescan library", "$count songs · New and deleted files update automatically", Icons.Rounded.Refresh, { vm.scan(manual = true) }) }
         item { SettingSwitch("Hide WhatsApp audio", "Keep voice notes out of your library", settings.hideWhatsApp) { vm.flagSetting("hideWhatsApp", it) } }
         item { SettingSwitch("Show hidden folders", "Include folders whose names start with a dot", settings.showHidden) { vm.flagSetting("showHidden", it) } }
         item { SectionTitle("Appearance") }

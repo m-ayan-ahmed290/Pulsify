@@ -11,8 +11,8 @@ android {
         applicationId = "com.pulsify.music"
         minSdk = 29
         targetSdk = 35
-        versionCode = providers.gradleProperty("versionCode").orElse("3").get().toInt()
-        versionName = providers.gradleProperty("versionName").orElse("1.1.0").get()
+        versionCode = providers.gradleProperty("versionCode").orElse("4").get().toInt()
+        versionName = providers.gradleProperty("versionName").orElse("1.1.1").get()
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
     val signingPath = System.getenv("PULSIFY_KEYSTORE")
