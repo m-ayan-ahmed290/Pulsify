@@ -4,13 +4,14 @@ package com.pulsify.music.ui
 import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.media.audiofx.AudioEffect
 import android.os.Build
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.*
-import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.*
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.Alignment
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -47,11 +48,13 @@ import kotlinx.coroutines.launch
         val playlists by vm.playlists.collectAsStateWithLifecycle()
         val filter by vm.filter.collectAsStateWithLifecycle()
         val snack = remember { SnackbarHostState() }
-        val scope = rememberCoroutineScope()
+        var lastTab by rememberSaveable { mutableStateOf("home") }
         var selected by remember { mutableStateOf<Track?>(null) }
         var playlistSongs by remember { mutableStateOf<List<String>?>(null) }
         var addSelection by remember { mutableStateOf(false) }
-        var create by remember { mutableStateOf(false) }
+        var create by rememberSaveable { mutableStateOf(false) }
+        var pendingSongs by remember { mutableStateOf<List<String>>(emptyList()) }
+        var pendingSelection by remember { mutableStateOf(false) }
         var details by remember { mutableStateOf<Song?>(null) }
         var lyricsOpen by remember { mutableStateOf(false) }
         var lyricSong by remember { mutableStateOf("") }
@@ -69,14 +72,12 @@ import kotlinx.coroutines.launch
         val lyricsPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri -> if(uri != null) vm.attachLyrics(lyricSong, uri) }
         fun library(section: String) { vm.filter.value = LibraryFilter(section = section); nav.navigate("library") { launchSingleTop = true } }
         fun openLyrics() { playback.item?.let { lyricSong = it.mediaId; vm.loadLyrics(it.mediaId); lyricsOpen = true } }
-        fun equalizer() {
-            vm.audioSession { session ->
-                val intent = Intent(AudioEffect.ACTION_DISPLAY_AUDIO_EFFECT_CONTROL_PANEL).putExtra(AudioEffect.EXTRA_AUDIO_SESSION, session)
-                    .putExtra(AudioEffect.EXTRA_PACKAGE_NAME, context.packageName).putExtra(AudioEffect.EXTRA_CONTENT_TYPE, AudioEffect.CONTENT_TYPE_MUSIC)
-                try { context.startActivity(intent) } catch(_: android.content.ActivityNotFoundException) { vm.message.value = "This device does not provide an audio effects panel." }
-            }
-        }
-        LaunchedEffect(message) { message?.let { snack.showSnackbar(it); if(vm.message.value == it) vm.message.value = null } }
+        fun equalizer() { nav.navigate("effects") { launchSingleTop = true } }
+        LaunchedEffect(message) { message?.let {
+            val result = snack.showSnackbar(it, actionLabel = if(it == "Removed from queue") "Undo" else null)
+            if(result == SnackbarResult.ActionPerformed && it == "Removed from queue") vm.undoRemove()
+            if(vm.message.value == it) vm.message.value = null
+        } }
         LaunchedEffect(settings.folder) {
             if(settings.folder.isNotEmpty() || ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED) vm.scan()
         }
@@ -86,40 +87,45 @@ import kotlinx.coroutines.launch
             else if(settings.folder.isNotEmpty() || ContextCompat.checkSelfPermission(context, permission) == PackageManager.PERMISSION_GRANTED) vm.scan()
         }
         val keyboard = WindowInsets.ime.getBottom(LocalDensity.current) > 0
-        val mainRoute = route in listOf("home", "library", "playlists", "search", "settings")
+        val mainRoute = route in primaryRoutes || route == "settings"
+        LaunchedEffect(route) { if(route in primaryRoutes) lastTab = route }
         Scaffold(modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background).safeDrawingPadding().imePadding(), snackbarHost = { SnackbarHost(snack) },
             bottomBar = {
-                if(mainRoute && !keyboard) Column {
-                    AnimatedVisibility(playback.item != null, enter = fadeIn() + expandVertically(), exit = fadeOut() + shrinkVertically()) {
-                        MiniPlayer(playback, { nav.navigate("now") }, vm::toggle, vm::next)
-                    }
-                    NavigationBar(containerColor = MaterialTheme.colorScheme.surface, windowInsets = WindowInsets(0,0,0,0)) {
-                        val tabs = listOf(Triple("home", "Home", Icons.Rounded.Home), Triple("library", "Library", Icons.Rounded.LibraryMusic),
-                            Triple("playlists", "Playlists", Icons.AutoMirrored.Rounded.QueueMusic), Triple("search", "Search", Icons.Rounded.Search), Triple("settings", "Settings", Icons.Rounded.Tune))
-                        tabs.forEach { (path, label, icon) -> NavigationBarItem(selected = route == path, onClick = {
+                if(!keyboard) AnimatedVisibility(mainRoute, enter = expandVertically(tween(420)) + slideInVertically(tween(420, easing = FastOutSlowInEasing)) { it } + fadeIn(tween(320)),
+                    exit = shrinkVertically(tween(360)) + fadeOut(tween(240))) {
+                    Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                        NavigationDock(if(route in primaryRoutes) route else lastTab, playback, { path ->
                             if(path == "library" && route != path) vm.filter.value = LibraryFilter()
-                            if(path == "search") vm.filter.value = LibraryFilter()
+                            if(path == "search" && route != path) vm.filter.value = LibraryFilter()
                             nav.navigate(path) { popUpTo("home") { saveState = true }; launchSingleTop = true; restoreState = true }
-                        }, icon = { Icon(icon, label) }, label = { Text(label, maxLines = 1, style = MaterialTheme.typography.labelSmall) }) }
+                        }, { nav.navigate("now") { launchSingleTop = true } }, vm::toggle, vm::next, vm::previous)
                     }
                 }
             }) { padding ->
             NavHost(nav, startDestination = "home", modifier = Modifier.padding(padding),
-                enterTransition = { fadeIn(tween(220)) + slideInHorizontally(tween(240)) { it / 18 } },
-                exitTransition = { fadeOut(tween(150)) }, popEnterTransition = { fadeIn(tween(220)) }, popExitTransition = { fadeOut(tween(150)) }) {
-                composable("home") { HomeScreen(vm, ::library, { nav.navigate("settings") }, { selected = it }, { nav.navigate("now") }) }
+                enterTransition = {
+                    if(targetState.destination.route == "now") slideInVertically(tween(520, easing = CubicBezierEasing(.16f,1f,.3f,1f))) { it } + fadeIn(tween(300))
+                    else slideInHorizontally(tween(420, easing = FastOutSlowInEasing)) { width ->
+                        if(primaryRoutes.indexOf(targetState.destination.route) in 0 until primaryRoutes.indexOf(initialState.destination.route)) -width / 3 else width / 3
+                    } + fadeIn(tween(300))
+                },
+                exitTransition = { if(targetState.destination.route == "now") scaleOut(tween(400), targetScale = .94f) + fadeOut(tween(300)) else slideOutHorizontally(tween(360)) { -it / 7 } + fadeOut(tween(220)) },
+                popEnterTransition = { if(initialState.destination.route == "now") scaleIn(tween(450), initialScale = .94f) + fadeIn(tween(300)) else slideInHorizontally(tween(420)) { -it / 3 } + fadeIn(tween(280)) },
+                popExitTransition = { if(initialState.destination.route == "now") slideOutVertically(tween(450, easing = FastOutSlowInEasing)) { it } else slideOutHorizontally(tween(360)) { it / 3 } + fadeOut(tween(220)) }) {
+                composable("home") { HomeScreen(vm, ::library, { nav.navigate("settings") }, { selected = it }, { nav.navigate("now") }, ::equalizer, { folderPicker.launch(null) }) }
                 composable("library") {
                     BackHandler(filter.group != null || filter.playlist != null) { vm.filter.value = filter.copy(group = null, playlist = null) }
-                    LibraryScreen(vm, { selected = it }, { folderPicker.launch(null) }, { requestAudio.launch(permission) }, { addSelection = true })
+                    LibraryScreen(vm, { selected = it }, { folderPicker.launch(null) }, { requestAudio.launch(permission) }, { addSelection = true }, { playlistSongs = it }, { nav.navigate("settings") })
                 }
-                composable("search") { SearchScreen(vm, { selected = it }, { playlist -> vm.filter.value = LibraryFilter(playlist = playlist.id); nav.navigate("library") }) }
-                composable("playlists") { PlaylistsScreen(vm, { create = true }, { playlist -> vm.filter.value = LibraryFilter(playlist = playlist.id); nav.navigate("library") }) }
-                composable("settings") { SettingsScreen(vm, { folderPicker.launch(null) }, { requestAudio.launch(permission) }, ::equalizer) }
-                composable("now") { NowPlayingScreen(vm, { nav.popBackStack() }, { nav.navigate("queue") }, ::openLyrics, { vm.current.value?.let { selected = it } }) }
+                composable("search") { SearchScreen(vm, { selected = it }, { playlist -> vm.filter.value = LibraryFilter(playlist = playlist.id); nav.navigate("library") }, ::library) }
+                composable("playlists") { PlaylistsScreen(vm, { pendingSongs = emptyList(); pendingSelection = false; create = true }, { playlist -> vm.filter.value = LibraryFilter(playlist = playlist.id); nav.navigate("library") }) }
+                composable("settings") { SettingsScreen(vm, { folderPicker.launch(null) }, { requestAudio.launch(permission) }, ::equalizer, { nav.popBackStack() }) }
+                composable("now") { NowPlayingScreen(vm, { nav.popBackStack() }, { nav.navigate("queue") }, ::openLyrics, { vm.current.value?.let { selected = it } }, ::equalizer) }
+                composable("effects") { EffectsScreen(vm, { nav.popBackStack() }) }
                 composable("queue") { QueueScreen(vm, { nav.popBackStack() }) }
             }
         }
-        if(create) NameDialog("New playlist", onDismiss = { create = false }, onSave = vm::createPlaylist)
+        if(create) NameDialog("New playlist", onDismiss = { create = false }, onSave = { vm.createPlaylist(it, pendingSongs, pendingSelection); pendingSongs = emptyList(); pendingSelection = false })
         selected?.let { track ->
             ModalBottomSheet(onDismissRequest = { selected = null }) {
                 Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp).padding(bottom = 24.dp)) {
@@ -146,7 +152,7 @@ import kotlinx.coroutines.launch
                     if(addSelection) vm.addSelection(summary.playlist.id) else vm.addPlaylist(summary.playlist.id, playlistSongs.orEmpty())
                     playlistSongs = null; addSelection = false
                 }) { Text(summary.playlist.name) } }
-            } }, confirmButton = { TextButton(onClick = { playlistSongs = null; addSelection = false; create = true }) { Text("New playlist") } },
+            } }, confirmButton = { TextButton(onClick = { pendingSongs = playlistSongs.orEmpty(); pendingSelection = addSelection; playlistSongs = null; addSelection = false; create = true }) { Text("New playlist") } },
             dismissButton = { TextButton(onClick = { playlistSongs = null; addSelection = false }) { Text("Cancel") } })
         details?.let { song -> AlertDialog(onDismissRequest = { details = null }, title = { Text("Track details") }, text = {
             Column(Modifier.heightIn(max = 450.dp).verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(10.dp)) {
@@ -155,10 +161,15 @@ import kotlinx.coroutines.launch
                     "File" to song.id).forEach { (key,value) -> Text("$key\n${value.ifBlank { "Unknown" }}", style = MaterialTheme.typography.bodyMedium) }
             }
         }, confirmButton = { TextButton(onClick = { details = null }) { Text("Done") } }) }
-        if(lyricsOpen) AlertDialog(onDismissRequest = { lyricsOpen = false }, title = { Text("Lyrics") }, text = {
-            Text(lyrics ?: "Attach a local .txt or .lrc file for this song. Your lyrics stay on this device.", Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState()))
-        }, confirmButton = { TextButton(onClick = { lyricsPicker.launch(arrayOf("text/*", "application/octet-stream")) }) { Text("Attach file") } },
-            dismissButton = { TextButton(onClick = { lyricsOpen = false }) { Text("Close") } })
+        if(lyricsOpen) ModalBottomSheet(onDismissRequest = { lyricsOpen = false }) {
+            Column(Modifier.fillMaxWidth().heightIn(max = 620.dp).padding(horizontal = 24.dp).padding(bottom = 24.dp)) {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) { Text("EVERY WORD, EVERY FEELING", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.labelSmall); Text("Lyrics", style = MaterialTheme.typography.headlineMedium) }
+                    TextButton(onClick = { lyricsPicker.launch(arrayOf("text/*", "application/octet-stream")) }) { Text("Attach file") }
+                }
+                Text(lyrics ?: "Your words belong here.\n\nAttach a local .txt or .lrc file to read along. Lyrics stay on this device.", Modifier.weight(1f, fill = false).verticalScroll(rememberScrollState()).padding(vertical = 24.dp), style = MaterialTheme.typography.headlineSmall, color = MaterialTheme.colorScheme.onSurface.copy(alpha = .8f))
+            }
+        }
     }
 }
 @Composable fun MenuAction(label: String, icon: androidx.compose.ui.graphics.vector.ImageVector, onClick: () -> Unit) {

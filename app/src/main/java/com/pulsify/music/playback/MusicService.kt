@@ -6,6 +6,8 @@ import android.os.Bundle
 import android.os.SystemClock
 import androidx.media3.common.*
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.analytics.AnalyticsListener
+import com.pulsify.music.domain.RepeatSegment
 import androidx.media3.session.*
 import com.google.common.collect.ImmutableList
 import com.google.common.util.concurrent.Futures
@@ -36,6 +38,11 @@ class MusicService : MediaLibraryService() {
     private var saveTicks = 0
     private var restoring = true
     private var lastQueue = emptyList<String>()
+    private lateinit var effects: AudioEffects
+    private var effectsSave: Job? = null
+    private var segment = RepeatSegment()
+    private var segmentJob: Job? = null
+    private var listeningVolume = 1f
     private val store by lazy { getSharedPreferences("playback", MODE_PRIVATE) }
 
     override fun onCreate() {
@@ -43,16 +50,24 @@ class MusicService : MediaLibraryService() {
         player = ExoPlayer.Builder(this).setAudioAttributes(AudioAttributes.Builder()
             .setUsage(C.USAGE_MEDIA).setContentType(C.AUDIO_CONTENT_TYPE_MUSIC).build(), true)
             .setHandleAudioBecomingNoisy(true).setWakeMode(C.WAKE_MODE_LOCAL).build()
+        effects = AudioEffects(this) { player.volume = listeningVolume * effects.outputGain() }
+        listeningVolume = store.getFloat("volume", 1f).coerceIn(0f,1f)
+        player.setPlaybackSpeed(store.getFloat("speed", 1f).coerceIn(.5f,2f))
+        player.volume = listeningVolume * effects.outputGain()
+        player.addAnalyticsListener(object : AnalyticsListener {
+            override fun onAudioSessionIdChanged(eventTime: AnalyticsListener.EventTime, audioSessionId: Int) { effects.attach(audioSessionId) }
+        })
         session = MediaLibrarySession.Builder(this, player, Callback()).setSessionActivity(
             PendingIntent.getActivity(this, 0, Intent(this, MainActivity::class.java), PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)).build()
         player.addListener(object : Player.Listener {
             override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
-                listened = 0; counted = false
+                listened = 0; counted = false; segment = RepeatSegment(); segmentJob?.cancel()
                 if(reason == Player.MEDIA_ITEM_TRANSITION_REASON_AUTO && sleepTracks > 0 && --sleepTracks == 0) stopForSleep()
                 snapshot()
             }
             override fun onTimelineChanged(timeline: Timeline, reason: Int) { snapshot(queueChanged = true) }
             override fun onIsPlayingChanged(isPlaying: Boolean) { lastTick = SystemClock.elapsedRealtime(); snapshot() }
+            override fun onPlaybackParametersChanged(playbackParameters: PlaybackParameters) { snapshot() }
             override fun onRepeatModeChanged(repeatMode: Int) { snapshot() }
             override fun onShuffleModeEnabledChanged(shuffleModeEnabled: Boolean) { snapshot() }
             override fun onPlaybackStateChanged(playbackState: Int) {
@@ -87,7 +102,7 @@ class MusicService : MediaLibraryService() {
         if(restoring) return
         if(queueChanged) lastQueue = (0 until player.mediaItemCount).map { player.getMediaItemAt(it).mediaId }
         val value = StoredSession(lastQueue, player.currentMediaItemIndex.coerceAtLeast(0), player.currentPosition.coerceAtLeast(0), player.shuffleModeEnabled, player.repeatMode).encode()
-        store.edit().putString("snapshot", value).apply()
+        store.edit().putString("snapshot", value).putFloat("speed", player.playbackParameters.speed).apply()
     }
     private suspend fun restore() {
         if (!app.preferences.flow.first().resume) return
@@ -113,8 +128,34 @@ class MusicService : MediaLibraryService() {
         override fun onConnect(session: MediaSession, controller: MediaSession.ControllerInfo): MediaSession.ConnectionResult =
             MediaSession.ConnectionResult.AcceptedResultBuilder(session)
                 .setAvailableSessionCommands(MediaSession.ConnectionResult.DEFAULT_SESSION_AND_LIBRARY_COMMANDS.buildUpon()
-                    .add(SessionCommand(SLEEP, Bundle.EMPTY)).add(SessionCommand(SLEEP_STATUS, Bundle.EMPTY)).build()).build()
+                    .add(SessionCommand(SLEEP, Bundle.EMPTY)).add(SessionCommand(SLEEP_STATUS, Bundle.EMPTY))
+                    .add(SessionCommand(EFFECTS, Bundle.EMPTY)).add(SessionCommand(EFFECTS_STATUS, Bundle.EMPTY))
+                    .add(SessionCommand(SEGMENT, Bundle.EMPTY)).add(SessionCommand(VOLUME, Bundle.EMPTY)).build()).build()
         override fun onCustomCommand(session: MediaSession, controller: MediaSession.ControllerInfo, customCommand: SessionCommand, args: Bundle): ListenableFuture<SessionResult> {
+            when(customCommand.customAction) {
+                EFFECTS -> {
+                    effects.update(EffectsConfig.decode(args.getString("config")))
+                    player.volume = listeningVolume * effects.outputGain()
+                    effectsSave?.cancel(); effectsSave = scope.launch { delay(350); effects.save() }
+                    return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS, effects.bundle()))
+                }
+                EFFECTS_STATUS -> return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS, effects.bundle()))
+                SEGMENT -> {
+                    segment = if(args.getBoolean("clear")) RepeatSegment() else segment.mark(player.currentPosition, player.duration.coerceAtLeast(0))
+                    segmentJob?.cancel()
+                    if(segment.active) segmentJob = scope.launch {
+                        while(isActive) {
+                            if(player.isPlaying && segment.shouldSeek(player.currentPosition)) player.seekTo(segment.start)
+                            delay(if(player.isPlaying) 40 else 250)
+                        }
+                    }
+                }
+                VOLUME -> {
+                    listeningVolume = args.getFloat("volume", 1f).coerceIn(0f,1f)
+                    player.volume = listeningVolume * effects.outputGain()
+                    store.edit().putFloat("volume", listeningVolume).apply()
+                }
+            }
             if(customCommand.customAction == SLEEP) {
                 sleepDeadline = 0; sleepTracks = 0; sleepAtEnd = false
                 val minutes = args.getInt("minutes")
@@ -125,6 +166,7 @@ class MusicService : MediaLibraryService() {
             return Futures.immediateFuture(SessionResult(SessionResult.RESULT_SUCCESS, Bundle().apply {
                 putLong("remaining", (sleepDeadline - SystemClock.elapsedRealtime()).coerceAtLeast(0))
                 putInt("tracks", sleepTracks); putBoolean("end", sleepAtEnd); putInt("audioSessionId", player.audioSessionId)
+                putLong("loopA", segment.start); putLong("loopB", segment.end); putFloat("volume", listeningVolume)
             }))
         }
         override fun onGetLibraryRoot(session: MediaLibrarySession, browser: MediaSession.ControllerInfo, params: LibraryParams?): ListenableFuture<LibraryResult<MediaItem>> =
@@ -164,7 +206,11 @@ class MusicService : MediaLibraryService() {
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaLibrarySession = session
     override fun onTaskRemoved(rootIntent: Intent?) { if(!player.playWhenReady) stopSelf() }
     override fun onDestroy() {
-        snapshot(queueChanged = true); scope.cancel(); session.release(); player.release(); super.onDestroy()
+        snapshot(queueChanged = true); effects.save(); effects.release(); scope.cancel(); session.release(); player.release(); super.onDestroy()
     }
-    companion object { const val SLEEP = "com.pulsify.SLEEP"; const val SLEEP_STATUS = "com.pulsify.SLEEP_STATUS" }
+    companion object {
+        const val SLEEP = "com.pulsify.SLEEP"; const val SLEEP_STATUS = "com.pulsify.SLEEP_STATUS"
+        const val EFFECTS = "com.pulsify.EFFECTS"; const val EFFECTS_STATUS = "com.pulsify.EFFECTS_STATUS"
+        const val SEGMENT = "com.pulsify.SEGMENT"; const val VOLUME = "com.pulsify.VOLUME"
+    }
 }

@@ -24,13 +24,14 @@ data class Playlist(@PrimaryKey(autoGenerate = true) val id: Long = 0, val name:
         ForeignKey(entity = Song::class, parentColumns = ["id"], childColumns = ["songId"], onDelete = ForeignKey.CASCADE)],
     indices = [Index("songId")])
 data class PlaylistEntry(val playlistId: Long, val songId: String, val position: Int)
-data class PlaylistSummary(@Embedded val playlist: Playlist, val count: Int)
+data class PlaylistSummary(@Embedded val playlist: Playlist, val count: Int, val artwork: String? = null)
 data class LibraryGroup(val name: String, val count: Int, val artwork: String?)
 
 @Dao
 abstract class MusicDao {
     @RawQuery(observedEntities = [Song::class, SongStats::class, PlaylistEntry::class])
     abstract fun paged(query: SupportSQLiteQuery): PagingSource<Int, Track>
+    @RawQuery(observedEntities = [Song::class, SongStats::class]) abstract fun observeTracks(query: SupportSQLiteQuery): Flow<List<Track>>
     @RawQuery abstract suspend fun tracks(query: SupportSQLiteQuery): List<Track>
     @Query("SELECT songs.*, COALESCE(stats.favorite,0) AS favorite, COALESCE(stats.playCount,0) AS playCount, COALESCE(stats.lastPlayed,0) AS lastPlayed FROM songs LEFT JOIN stats ON songs.id=stats.songId WHERE songs.id=:id")
     abstract suspend fun track(id: String): Track?
@@ -49,7 +50,7 @@ abstract class MusicDao {
         val previous = stats(id) ?: SongStats(id)
         saveStats(previous.copy(playCount = previous.playCount + 1, lastPlayed = System.currentTimeMillis()))
     }
-    @Query("SELECT playlists.*, COUNT(playlist_songs.songId) AS count FROM playlists LEFT JOIN playlist_songs ON playlists.id=playlist_songs.playlistId GROUP BY playlists.id ORDER BY name COLLATE NOCASE")
+    @Query("SELECT playlists.*, COUNT(playlist_songs.songId) AS count, MIN(songs.artwork) AS artwork FROM playlists LEFT JOIN playlist_songs ON playlists.id=playlist_songs.playlistId LEFT JOIN songs ON songs.id=playlist_songs.songId GROUP BY playlists.id ORDER BY name COLLATE NOCASE")
     abstract fun playlists(): Flow<List<PlaylistSummary>>
     @Insert abstract suspend fun create(playlist: Playlist): Long
     @Query("UPDATE playlists SET name=:name WHERE id=:id") abstract suspend fun rename(id: Long, name: String)

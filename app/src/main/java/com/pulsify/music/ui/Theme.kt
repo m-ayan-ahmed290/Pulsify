@@ -9,15 +9,28 @@ import androidx.compose.ui.platform.LocalView
 import androidx.core.view.WindowCompat
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.sp
 import com.pulsify.music.data.Settings
 
-val Violet = Color(0xFFC5ABFF)
-private val Dark = darkColorScheme(primary = Violet, onPrimary = Color(0xFF291454), primaryContainer = Color(0xFF39265D),
-    secondary = Color(0xFFE0C7FF), background = Color(0xFF101116), surface = Color(0xFF101116),
-    surfaceContainer = Color(0xFF1C1D25), surfaceVariant = Color(0xFF292A35), onSurface = Color(0xFFF5F1FA),
-    onSurfaceVariant = Color(0xFFAAA7B6), outline = Color(0xFF494652))
-private val Light = lightColorScheme(primary = Color(0xFF6842AF), primaryContainer = Color(0xFFEBDDFF),
-    background = Color(0xFFFAF8FF), surface = Color(0xFFFAF8FF), surfaceContainer = Color(0xFFF0EAF7))
+val Violet = Color(0xFFC1A3FF)
+val Acid = Color(0xFFD4F883)
+val Peach = Color(0xFFFFB6A0)
+private val Dark = darkColorScheme(primary = Violet, onPrimary = Color(0xFF201235), primaryContainer = Color(0xFF342547),
+    secondary = Acid, onSecondary = Color(0xFF18230B), secondaryContainer = Color(0xFF29361C),
+    background = Color(0xFF0B0C0F), surface = Color(0xFF0B0C0F), surfaceContainer = Color(0xFF191B20),
+    surfaceVariant = Color(0xFF25272E), onSurface = Color(0xFFF6F5F8), onSurfaceVariant = Color(0xFFA2A4B0), outline = Color(0xFF393B45))
+private val Light = lightColorScheme(primary = Color(0xFF7344BA), primaryContainer = Color(0xFFECDDFF),
+    secondary = Color(0xFF3E620F), onSecondary = Color.White, secondaryContainer = Color(0xFFD4F1B5),
+    background = Color(0xFFFAF9FC), surface = Color(0xFFFAF9FC), surfaceContainer = Color(0xFFF0EDF5), surfaceVariant = Color(0xFFE8E4EE))
+private val Type = Typography(
+    displaySmall = TextStyle(fontFamily = FontFamily.SansSerif, fontWeight = FontWeight.ExtraBold, fontSize = 36.sp, lineHeight = 39.sp, letterSpacing = (-1.2).sp),
+    headlineLarge = TextStyle(fontFamily = FontFamily.SansSerif, fontWeight = FontWeight.ExtraBold, fontSize = 32.sp, lineHeight = 36.sp, letterSpacing = (-1).sp),
+    headlineMedium = TextStyle(fontFamily = FontFamily.SansSerif, fontWeight = FontWeight.Bold, fontSize = 28.sp, lineHeight = 33.sp, letterSpacing = (-.7).sp),
+    headlineSmall = TextStyle(fontFamily = FontFamily.SansSerif, fontWeight = FontWeight.Bold, fontSize = 24.sp, lineHeight = 29.sp, letterSpacing = (-.5).sp),
+    titleLarge = TextStyle(fontFamily = FontFamily.SansSerif, fontWeight = FontWeight.Bold, fontSize = 21.sp, lineHeight = 27.sp, letterSpacing = (-.4).sp))
 @Composable fun PulsifyTheme(settings: Settings, content: @Composable () -> Unit) {
     val dark = settings.theme == "Dark" || (settings.theme == "System" && isSystemInDarkTheme())
     val colors = if(settings.dynamic && Build.VERSION.SDK_INT >= 31) {
@@ -25,12 +38,9 @@ private val Light = lightColorScheme(primary = Color(0xFF6842AF), primaryContain
     } else if(dark) Dark else Light
     val view = LocalView.current
     if(!view.isInEditMode) SideEffect {
-        (view.context as? android.app.Activity)?.window?.let { window ->
-            WindowCompat.getInsetsController(window, view).apply {
-                isAppearanceLightStatusBars = !dark
-                isAppearanceLightNavigationBars = !dark
-            }
-        }
+        (view.context as? android.app.Activity)?.window?.let { window -> WindowCompat.getInsetsController(window, view).apply {
+            isAppearanceLightStatusBars = !dark; isAppearanceLightNavigationBars = !dark
+        } }
     }
-    MaterialTheme(colorScheme = colors, typography = Typography(), content = content)
+    MaterialTheme(colorScheme = colors, typography = Type, content = content)
 }

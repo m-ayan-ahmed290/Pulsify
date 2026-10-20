@@ -2,7 +2,7 @@
 
 A native, offline Android music player for Android 10 and newer. Built with Kotlin, Compose Material 3, Media3, Room, Paging 3, DataStore, Coil, WorkManager, coroutines, and Navigation Compose. Application ID: `com.pulsify.music`.
 
-The supplied **Pulsify App Icon.png** is the launcher icon and appears on Home. The interface uses a violet visual identity, rounded artwork, short navigation transitions, animated artwork changes, lazy lists, and an animated mini-player progress bar. There are no sample songs, accounts, analytics, or Internet permission.
+The supplied **Pulsify App Icon.png** is the launcher icon and appears on Home. The redesigned interface uses an artwork-led dark theme with violet and lime accents, editorial music shelves, an adaptive album grid, a floating four-tab navigation dock, and a connected mini-player. Navigation, artwork, controls, lists, and the mini-player use explicit motion that respects Android’s animation scale. There are no sample songs, accounts, analytics, or Internet permission.
 
 ## Implemented
 
@@ -10,14 +10,19 @@ The supplied **Pulsify App Icon.png** is the launcher icon and appears on Home. 
 - MediaStore change observer while the app is alive, startup scan, manual rescan, and a WorkManager scan about every 15 minutes while Android permits background work.
 - Songs, albums, artists, genres, folders, favorites, recently added, recently played, most played, and playlists. Indexed database search includes title, artist, album, genre, and folder; playlist names appear as separate search results. Eight sort fields with ascending/descending order.
 - Media3 ExoPlayer and `MediaLibraryService`: background audio, foreground media notification, lock-screen controls, audio focus, headphone-disconnect pause, Bluetooth/headset controls, and a paginated library root with local media-search callbacks and play-from-search resolution for compatible media browsers/Android Auto.
-- Play/pause, previous/next, seek, ten-second skips, shuffle, repeat, speed, queue append/play-next/remove/reorder/clear. Play a filtered album, artist, folder, playlist, or library using the Play/Shuffle controls.
+- Play/pause, previous/next, seek, configurable 5/10/15/30/60-second skips, shuffle, repeat, saved speed and player volume, queue append/play-next/remove/reorder/clear. Play a filtered album, artist, folder, playlist, or library using the Play/Shuffle controls.
 - Saved queue, current index, playback position, shuffle and repeat. Restores **paused**, with an option to disable restoring. Tap Play to resume. State is checkpointed every five seconds and at player events.
 - Room playlists: create, rename, delete, add song/whole filtered selection, remove/reorder tracks, play, shuffle, JSON export/import through Android’s document picker. Duplicate song membership is prevented.
 - Persistent favorites and play history. A play counts after 30 seconds or half the duration (whichever comes first, with a one-second minimum); seeking alone does not count.
-- Responsive, scrollable Now Playing; persistent mini-player; accessible controls and ellipsized long titles. Adaptive collection grids and scrollable compact layouts.
+- Responsive Now Playing with a two-column landscape layout, animated artwork/title changes, swipe-to-skip artwork, playback tools, full lyrics sheet, Up Next, and a Sound Studio shortcut. The persistent mini-player also supports swipe-to-skip. Adaptive collection grids, playlist cover cards, accessible controls, and ellipsized long titles.
 - Sleep timer: 5/10/15/30/45/60 minutes, current song, 2/3/5/10 songs, or end of queue. Cancellation and remaining status. End-of-queue requires repeat off.
 - Per-track local TXT/LRC attachment, retained privately on the device. LRC is displayed as text, without synchronized highlighting.
-- Device-provided audio effects panel with active audio session ID and an unsupported-device message.
+- **Sound Studio inside Pulsify**: five equalizer anchors mapped onto device bands, Flat/Bass/Warm/Vocal/Electronic/Rock/Jazz/Acoustic presets, custom gains, bass boost, headphone virtualization, master bypass, and optional headroom adjustment. Effects attach to ExoPlayer’s audio session in the background service. Configuration is saved and reattached on session changes; unavailable effects are clearly disabled. There is no system equalizer redirect.
+- **A–B repeat** for a passage of the current song, with a one-second minimum and an active-only timing job. Seek to A, mark it in Playback tools, seek ahead, and mark B. Clear the loop to resume normal playback. Changing tracks clears the loop.
+- **Library multi-select**: hold a song, choose more, and play, queue, or add the selection to a playlist. Creating a playlist from the picker retains the pending selection.
+- **Queue gestures**: swipe left to remove, Undo from the snackbar, accessible up/down ordering, and remove-already-played cleanup.
+- **Recent searches**: the latest eight unique searches are saved locally and can be cleared. Browse cards lead directly to albums/artists/genres/folders.
+- **Personal listening shelves and mixes**: recently played, liked, and newly added shelves; Play my mix builds a shuffled, 50-song mix that prioritizes favorites. These use the local Room library, with no remote recommendation service.
 - Light/dark/system appearance, optional Android 12+ dynamic colors, artwork fallback, temporary image-cache clearing, Android permission settings.
 - Keyboard-safe search and naming dialogs: `adjustResize`, safe-area/IME insets, scrollable dialogs, focused-field bring-into-view, and navigation hidden during keyboard use.
 
@@ -38,7 +43,7 @@ chmod +x gradlew
 
 Windows: use `gradlew.bat`. Android Studio creates `local.properties`; for command-line builds set `ANDROID_HOME` or provide your own `sdk.dir`. No developer-specific configuration belongs in Git.
 
-APK: `app/build/outputs/apk/debug/app-debug.apk`. Reports: `app/build/reports/`. Use `./gradlew connectedDebugAndroidTest` with an attached emulator/device to run the included input-dialog test. See [validation notes](docs/VALIDATION.md) for the exact checks executed in the delivery environment and the remaining hardware checks.
+APK: `app/build/outputs/apk/debug/app-debug.apk`. Reports: `app/build/reports/`. Use `./gradlew connectedDebugAndroidTest` with an attached emulator/device to run the dialog, navigation, Sound Studio, keyboard, and animation tests. See [validation notes](docs/VALIDATION.md) for the exact checks executed and the remaining hardware checks.
 
 Unsigned release build: `./gradlew assembleRelease bundleRelease`. For a signed local release, configure the four `PULSIFY_*` environment variables described below, including the absolute keystore path, and pass monotonically increasing `-PversionCode=... -PversionName=...`.
 
@@ -113,17 +118,13 @@ Library rows use Room Paging (50-item pages). Artwork is sampled to a bounded re
 
 - This is a complete source project with a working local-player feature set, not a claim that every item in the extended brief is implemented or certified for production distribution.
 - Online playlist retrieval/downloading and a download-manager UI are omitted. Local playback has no network dependency. No YouTube extraction, DRM circumvention, authentication/anti-bot bypass, or unsupported platform downloading is included. A future lawful provider must have its own validated API, explicit download rights, bounded background jobs, safe URL/redirect handling, and SAF destination-write permission.
-- No crossfade, ReplayGain, normalization, custom equalizer DSP, artwork picker, grid/list preference, notification customization, arbitrary skip duration, or per-song bookmarks. Gapless behavior depends on codec/device/metadata. Effects use an installed system panel and may be unavailable.
-- Playlist art uses a branded collection placeholder. Queue/playlist reordering uses accessible up/down actions, not drag gestures. Playlist exports use JSON only.
-- TXT/LRC lyrics are local text, not fetched or synchronized. Playback speed is session-scoped. Sleep timers persist while the playback service lives, not across process termination/reboot; end-of-queue requires repeat off. Android force-stop terminates playback and timers.
+- No crossfade, ReplayGain, loudness normalization, custom software DSP, artwork picker, grid/list preference, notification customization, or per-song bookmarks. Sound Studio uses Android Equalizer/BassBoost/Virtualizer APIs directly inside the app; hardware/output support varies. The five musical EQ anchors are interpolated logarithmically onto actual device bands, and levels are clamped to device limits. Headroom protection reduces playback level to accommodate boosts; it is not loudness normalization or a guarantee against every form of source clipping. Virtualizer is retained for Android 10 compatibility and is deprecated on newer Android versions. Gapless behavior depends on codec/device/metadata.
+- Playlist cards use available artwork from their songs, with a generated collection placeholder when no artwork is present. Queue/playlist reordering uses accessible up/down actions, not drag gestures. Playlist exports use JSON only.
+- TXT/LRC lyrics are local text, not fetched or synchronized. Playback speed, player volume, and Sound Studio configuration persist locally. A–B loop points are session-scoped and clear on a track change. Sleep timers persist while the playback service lives, not across process termination/reboot; end-of-queue requires repeat off. Android force-stop terminates playback and timers.
 - Android Auto exposes a basic paginated music root through MediaLibraryService. Automotive hardware/host certification and richer category browsing have not been tested here.
 - Media format support follows Android/Media3. Corrupt, deleted, or inaccessible files display a playback error; automatic skipping of bad tracks is not enabled.
 - The app is designed for small/large screens and landscape through scrolling/adaptive grids. Real-device keyboard, talkback, orientation, Bluetooth, audio focus, and OEM background-policy checks remain necessary before release. The documentation does not substitute for those checks.
 - No destructive library reset, database export, automatic app updater, or application data cloud backup. Keep playlist JSON backups and signing-key backups separately.
-
-## Screenshots
-
-Add actual device screenshots here after running the app: Home, Library, Now Playing, Search with the keyboard open, and Playlist naming with the keyboard open. No fabricated app screenshots are included.
 
 ## Usage
 

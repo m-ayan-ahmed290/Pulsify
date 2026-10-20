@@ -27,7 +27,7 @@ import org.json.JSONObject
 
  data class Playback(val item: MediaItem? = null, val playing: Boolean = false, val position: Long = 0,
     val duration: Long = 0, val shuffle: Boolean = false, val repeat: Int = 0, val queue: List<MediaItem> = emptyList(),
-    val index: Int = -1, val speed: Float = 1f, val sleep: String = "Off")
+    val index: Int = -1, val speed: Float = 1f, val sleep: String = "Off", val loopA: Long = -1, val loopB: Long = -1, val volume: Float = 1f)
 class MusicViewModel(application: Application) : AndroidViewModel(application) {
     private val app = application as PulsifyApplication
     val dao = app.database.music()
@@ -37,6 +37,11 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     val filter = MutableStateFlow(LibraryFilter())
     val tracks = filter.debounce(180).flatMapLatest { f -> Pager(PagingConfig(pageSize = 50, initialLoadSize = 100)) { dao.paged(LibraryQuery.build(f)) }.flow }.cachedIn(viewModelScope)
     val home = MutableStateFlow<List<Track>>(emptyList())
+    val history = dao.observeTracks(LibraryQuery.build(LibraryFilter(section = "Recently played"), 12)).stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    val liked = dao.observeTracks(LibraryQuery.build(LibraryFilter(section = "Favorites"), 12)).stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    val searchHistory = app.preferences.searchHistory.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+    val effects = MutableStateFlow(EffectsState())
+    private var undoItem: Pair<Int, MediaItem>? = null
     val scanning = MutableStateFlow(false)
     val message = MutableStateFlow<String?>(null)
     val playback = MutableStateFlow(Playback())
@@ -62,7 +67,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
                     override fun onEvents(player: Player, events: Player.Events) { updatePlayer(true) }
                     override fun onPlayerError(error: PlaybackException) { message.value = "Unable to play this file. It may be missing, inaccessible, or unsupported." }
                 })
-                updatePlayer(true)
+                updatePlayer(true); refreshEffects()
             } catch (_: Exception) { message.value = "Playback service could not connect. Please reopen Pulsify." }
         }, ContextCompat.getMainExecutor(app))
         try { app.contentResolver.registerContentObserver(MediaStore.Audio.Media.EXTERNAL_CONTENT_URI, true, observer) } catch (_: SecurityException) { /* Folder mode does not require MediaStore access. */ }
@@ -75,14 +80,14 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
                         runCatching { future.get() }.getOrNull()?.extras?.let { extras ->
                             val remaining = extras.getLong("remaining")
                             val sleep = when { remaining > 0 -> "${(remaining / 60000) + 1} min left"; extras.getInt("tracks") > 0 -> "${extras.getInt("tracks")} song(s) left"; extras.getBoolean("end") -> "End of queue"; else -> "Off" }
-                            playback.value = playback.value.copy(sleep = sleep)
+                            playback.value = playback.value.copy(sleep = sleep, loopA = extras.getLong("loopA", -1), loopB = extras.getLong("loopB", -1), volume = extras.getFloat("volume", 1f))
                         }
                     }, ContextCompat.getMainExecutor(app))
                 }
                 delay(1000)
             }
         }
-        viewModelScope.launch { dao.count().collect { refreshHome() } }
+        viewModelScope.launch { dao.observeTracks(LibraryQuery.build(LibraryFilter(section = "Recently added"), 12)).collect { home.value = it } }
     }
     private fun updatePlayer(queue: Boolean) {
         val c = controller ?: return
@@ -90,7 +95,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         playback.value = Playback(c.currentMediaItem, c.isPlaying, c.currentPosition.coerceAtLeast(0),
             c.duration.coerceAtLeast(0), c.shuffleModeEnabled, c.repeatMode,
             if(queue) (0 until c.mediaItemCount).map { c.getMediaItemAt(it) } else old.queue,
-            c.currentMediaItemIndex, c.playbackParameters.speed, old.sleep)
+            c.currentMediaItemIndex, c.playbackParameters.speed, old.sleep, old.loopA, old.loopB, old.volume)
         if(current.value?.song?.id != c.currentMediaItem?.mediaId) viewModelScope.launch { current.value = c.currentMediaItem?.mediaId?.let { dao.track(it) } }
     }
     fun scan(): Job = viewModelScope.launch {
@@ -101,6 +106,24 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         finally { scanning.value = false; if(scanPending) { scanPending = false; scan() } }
     }
     suspend fun refreshHome() { home.value = withContext(Dispatchers.IO) { dao.tracks(LibraryQuery.build(LibraryFilter(section = "Recently added"), 12)) } }
+    fun playPlaylist(id: Long, shuffle: Boolean = false) = action {
+        val songs = withContext(Dispatchers.IO) { dao.tracks(LibraryQuery.build(LibraryFilter(playlist = id), 2000)).map { it.song } }
+        if(songs.isEmpty()) { message.value = "Add a few songs to this playlist first"; return@action }
+        play(if(shuffle) songs.random() else songs.first(), songs, shuffle)
+    }
+    fun playMix() = action {
+        val songs = withContext(Dispatchers.IO) { dao.tracks(SimpleSQLiteQuery("SELECT songs.*, COALESCE(stats.favorite,0) AS favorite, COALESCE(stats.playCount,0) AS playCount, COALESCE(stats.lastPlayed,0) AS lastPlayed FROM songs LEFT JOIN stats ON songs.id=stats.songId ORDER BY COALESCE(stats.favorite,0) DESC, RANDOM() LIMIT 50")).map { it.song } }
+        if(songs.isEmpty()) { message.value = "Choose a music folder to create your mix"; return@action }
+        play(songs.first(), songs, true)
+    }
+    fun enqueueSelection(ids: List<String>) = action {
+        val items = withContext(Dispatchers.IO) { ids.mapNotNull { dao.song(it)?.mediaItem() } }
+        val c = controller ?: error("Playback is still connecting")
+        c.addMediaItems(items); if(c.playbackState == Player.STATE_IDLE) c.prepare(); message.value = "Added ${items.size} songs to queue"
+    }
+    fun playSelection(ids: List<String>) = action { val songs = withContext(Dispatchers.IO) { ids.mapNotNull { dao.song(it) } }; songs.firstOrNull()?.let { play(it, songs) } }
+    fun rememberSearch(query: String) = action { app.preferences.rememberSearch(query) }
+    fun clearSearchHistory() = action { app.preferences.text("searchHistory", "[]") }
     fun play(song: Song, list: List<Song>? = null, shuffle: Boolean = false) = action {
         val songs = list ?: withContext(Dispatchers.IO) { dao.tracks(LibraryQuery.build(filter.value, 2000)).map { it.song } }
         val queue = if(songs.any { it.id == song.id }) songs else listOf(song)
@@ -119,7 +142,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     fun seek(position: Long) { controller?.seekTo(position) }
     fun skip(direction: Int) { controller?.let { it.seekTo((it.currentPosition + direction * settings.value.skip * 1000).coerceIn(0, it.duration.coerceAtLeast(0))) } }
     fun shuffle() { controller?.let { it.shuffleModeEnabled = !it.shuffleModeEnabled } }
-    fun repeat() { controller?.let { it.repeatMode = (it.repeatMode + 1) % 3 } }
+    fun repeat() { controller?.let { it.repeatMode = when(it.repeatMode) { Player.REPEAT_MODE_OFF -> Player.REPEAT_MODE_ALL; Player.REPEAT_MODE_ALL -> Player.REPEAT_MODE_ONE; else -> Player.REPEAT_MODE_OFF } } }
     fun speed(value: Float) { controller?.setPlaybackSpeed(value) }
     fun addQueue(song: Song, next: Boolean) {
         val c = controller ?: run { message.value = "Playback is still connecting. Try again shortly."; return }
@@ -127,7 +150,9 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         if(c.playbackState == Player.STATE_IDLE) c.prepare()
         message.value = if(next) "Playing next" else "Added to queue"
     }
-    fun removeQueue(index: Int) { controller?.removeMediaItem(index) }
+    fun removeQueue(index: Int) { controller?.let { c -> if(index in 0 until c.mediaItemCount) { undoItem = index to c.getMediaItemAt(index); c.removeMediaItem(index); message.value = "Removed from queue" } } }
+    fun undoRemove() { val saved = undoItem ?: return; controller?.let { it.addMediaItem(saved.first.coerceIn(0,it.mediaItemCount), saved.second) }; undoItem = null }
+    fun clearPlayedQueue() { controller?.let { if(it.currentMediaItemIndex > 0) it.removeMediaItems(0,it.currentMediaItemIndex) } }
     fun moveQueue(from: Int, to: Int) { controller?.let { if(from in 0 until it.mediaItemCount && to in 0 until it.mediaItemCount) it.moveMediaItem(from, to) } }
     fun jumpQueue(index: Int) { controller?.let { it.seekTo(index, 0); it.play() } }
     fun clearQueue() { controller?.clearMediaItems() }
@@ -136,7 +161,12 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
         if(current.value?.song?.id == song.id) current.value = dao.track(song.id)
         refreshHome()
     }
-    fun createPlaylist(name: String) = action { dao.create(Playlist(name = validName(name))); message.value = "Playlist created" }
+    fun createPlaylist(name: String, ids: List<String> = emptyList(), fromSelection: Boolean = false) = action {
+        val id = dao.create(Playlist(name = validName(name)))
+        val songs = if(fromSelection) dao.tracks(LibraryQuery.build(filter.value)).map { it.song.id } else ids
+        if(songs.isNotEmpty()) dao.addToPlaylist(id, songs)
+        message.value = "Playlist created" + if(songs.isEmpty()) "" else " · ${songs.size} songs added"
+    }
     fun renamePlaylist(id: Long, name: String) = action { dao.rename(id, validName(name)) }
     fun deletePlaylist(id: Long) = action { dao.deletePlaylist(id) }
     fun addPlaylist(id: Long, songs: List<String>) = action { dao.addToPlaylist(id, songs); message.value = "Added to playlist" }
@@ -148,6 +178,7 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     }
     fun folder(uri: Uri) = action { app.preferences.text("folder", uri.toString()); scan() }
     fun useDevice() = action { app.preferences.text("folder", ""); scan() }
+    fun skipSetting(value: Int) = action { app.preferences.number("skip", value.coerceIn(5,60)) }
     fun textSetting(key: String, value: String) = action { app.preferences.text(key, value) }
     fun flagSetting(key: String, value: Boolean) = action { app.preferences.flag(key, value); if(key in listOf("hideWhatsApp", "showHidden")) scan() }
     fun sleep(minutes: Int = 0, tracks: Int = 0, end: Boolean = false) {
@@ -185,10 +216,21 @@ class MusicViewModel(application: Application) : AndroidViewModel(application) {
     fun clearArtworkCache() = action {
         withContext(Dispatchers.IO) { app.cacheDir.deleteRecursively() }; message.value = "Temporary image cache cleared"
     }
-    fun audioSession(onReady: (Int) -> Unit) {
-        val future = controller?.sendCustomCommand(SessionCommand(MusicService.SLEEP_STATUS, Bundle.EMPTY), Bundle.EMPTY) ?: return
-        future.addListener({ runCatching { future.get() }.getOrNull()?.let { onReady(it.extras.getInt("audioSessionId")) } }, ContextCompat.getMainExecutor(app))
+    private fun effectsCommand(action: String, args: Bundle = Bundle.EMPTY) {
+        val c = controller ?: run { message.value = "Playback is still connecting"; return }
+        val future = c.sendCustomCommand(SessionCommand(action, Bundle.EMPTY), args)
+        future.addListener({ runCatching { future.get() }.onSuccess { effects.value = EffectsState.fromBundle(it.extras) }.onFailure { message.value = "Unable to update audio effects. Please try again." } }, ContextCompat.getMainExecutor(app))
     }
+    fun refreshEffects() = effectsCommand(MusicService.EFFECTS_STATUS)
+    fun updateEffects(config: EffectsConfig) {
+        effects.value = effects.value.copy(config = config.safe())
+        effectsCommand(MusicService.EFFECTS, Bundle().apply { putString("config", config.safe().encode()) })
+    }
+    fun markLoop(clear: Boolean = false) {
+        val future = controller?.sendCustomCommand(SessionCommand(MusicService.SEGMENT, Bundle.EMPTY), Bundle().apply { putBoolean("clear", clear) }) ?: return
+        future.addListener({ runCatching { future.get() }.getOrNull()?.extras?.let { playback.value = playback.value.copy(loopA = it.getLong("loopA", -1), loopB = it.getLong("loopB", -1)) } }, ContextCompat.getMainExecutor(app))
+    }
+    fun volume(value: Float) { controller?.sendCustomCommand(SessionCommand(MusicService.VOLUME, Bundle.EMPTY), Bundle().apply { putFloat("volume", value.coerceIn(0f,1f)) }); playback.value = playback.value.copy(volume = value.coerceIn(0f,1f)) }
     val lyrics = MutableStateFlow<String?>(null)
     private fun lyricFile(id: String) = java.io.File(app.filesDir, "lyrics/" + java.security.MessageDigest.getInstance("SHA-256").digest(id.toByteArray()).joinToString("") { "%02x".format(it) } + ".txt")
     fun loadLyrics(id: String) = action { lyrics.value = withContext(Dispatchers.IO) { lyricFile(id).takeIf { it.exists() }?.readText() } }
