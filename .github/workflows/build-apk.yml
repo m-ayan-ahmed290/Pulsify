@@ -1,0 +1,83 @@
+name: Build Pulsify
+on:
+  push:
+    branches: ['**']
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  debug:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Install SDK
+        run: sdkmanager 'platforms;android-35' 'build-tools;35.0.0'
+      - run: chmod +x gradlew
+      - name: Test, lint and build debug APK
+        run: ./gradlew testDebugUnitTest lintDebug assembleDebug -PversionCode=${{ github.run_number }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pulsify-debug
+          path: app/build/outputs/apk/debug/*.apk
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: check-reports
+          path: |
+            app/build/reports/
+            app/build/test-results/
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: debug
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    env:
+      PULSIFY_STORE_PASSWORD: ${{ secrets.PULSIFY_STORE_PASSWORD }}
+      PULSIFY_KEY_ALIAS: ${{ secrets.PULSIFY_KEY_ALIAS }}
+      PULSIFY_KEY_PASSWORD: ${{ secrets.PULSIFY_KEY_PASSWORD }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Restore stable release signing key
+        env:
+          KEYSTORE_BASE64: ${{ secrets.PULSIFY_KEYSTORE_BASE64 }}
+        shell: bash
+        run: |
+          if [ -z "$KEYSTORE_BASE64" ]; then
+            echo 'Configure the four PULSIFY signing secrets documented in README.md before publishing a release.'
+            exit 1
+          fi
+          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$RUNNER_TEMP/pulsify.jks"
+          echo "PULSIFY_KEYSTORE=$RUNNER_TEMP/pulsify.jks" >> "$GITHUB_ENV"
+      - name: Build signed APK and App Bundle
+        shell: bash
+        run: |
+          chmod +x gradlew
+          sdkmanager 'platforms;android-35' 'build-tools;35.0.0'
+          ./gradlew assembleRelease bundleRelease -PversionCode=${{ github.run_number }} -PversionName="${GITHUB_REF_NAME#v}"
+          cp app/build/outputs/apk/release/app-release.apk pulsify.apk
+          cp app/build/outputs/bundle/release/app-release.aab pulsify.aab
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" pulsify.apk pulsify.aab --verify-tag --generate-notes --title "Pulsify $GITHUB_REF_NAME"
+      - name: Remove signing key
+        if: always()
+        run: rm -f "$RUNNER_TEMP/pulsify.jks"
